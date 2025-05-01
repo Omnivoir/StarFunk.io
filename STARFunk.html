@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Starfunk - Closed Beta</title>
+  <style>
+    body { margin:0; overflow:hidden; background:#000; }
+    canvas { display:block; }
+    #titleStatic {
+      position:absolute; top:10px; width:100%; text-align:center;
+      font-family:'Courier New', monospace; font-size:2rem;
+      color:#0ff; text-shadow:0 0 5px #0ff,0 0 10px #0ff; z-index:10;
+    }
+    #hud { position:absolute; top:50px; left:10px; z-index:10;
+      font-family:Courier, monospace; color:#0ff;
+    }
+    #hud span, #hud button {
+      margin-right:5px; padding:5px; background:rgba(0,0,0,0.5);
+      border:1px solid #0ff; color:#0ff; font-size:0.8rem;
+    }
+    #controls { position:absolute; bottom:20px; left:50%; transform:translateX(-50%);
+      z-index:10;
+    }
+    #controls button { width:50px; height:50px; margin:0 8px; font-size:1.5rem;
+      background:rgba(255,255,255,0.1); border:1px solid #0ff; color:#0ff;
+      border-radius:50%;
+    }
+    #controls button:active { background:#0ff; color:#000; }
+  </style>
+</head>
+<body>
+  <div id="titleStatic">STARFUNK</div>
+  <canvas id="gameCanvas"></canvas>
+  <div id="hud">
+    <span id="captain">CAPTAIN</span>
+    <span>WAVE:<span id="wave">0</span></span>
+    <span>SCORE:<span id="score">0</span></span>
+    <span id="lives">❤❤❤</span>
+    <span id="shield">🔵🔵🔵🔵🔵</span>
+    <button id="btnSpeed">SPD(10)</button>
+    <button id="btnRate">RATE(15)</button>
+    <button id="btnShield">SHLD(20)</button>
+    <button id="btnSpread">SPRD(25)</button>
+    <button id="btnMega">MEGA(30)</button>
+    <button id="btnWarp">WARP(1000)</button>
+    <button id="btnStart">START</button>
+  </div>
+  <div id="controls">
+    <button id="left">◀</button>
+    <button id="shoot">●</button>
+    <button id="right">▶</button>
+  </div>
+  <script>
+window.onload = function() {
+  const canvas = document.getElementById('gameCanvas'), ctx = canvas.getContext('2d');
+  let W = canvas.width = window.innerWidth, H = canvas.height = window.innerHeight;
+  let worldW = W, worldH = H;
+  window.addEventListener('resize', () => {
+    W = canvas.width = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+    worldW = W; worldH = H;
+  });
+
+  // Game state
+  const ship = { x: worldW/2, y: worldH*0.8, color:'#C0C0C0', speed:5 };
+  const stats = {
+    fireRate:300, lastFire:0,
+    score:0, wave:0, lives:3, shield:5,
+    dmgSingle:1, dmgSpread:0, dmgMega:0,
+    warpAmmo:0
+  };
+  let waveActive = false;
+  const keys = { left:false, right:false };
+  const stars = [[],[],[]], planets = [], meteors = [], aliens = [];
+  const bullets = [], alienBullets = [], beams = [], warps = [];
+  const waveDefs = [
+    { color:'green', count:20, speed:1 },
+    { color:'blue', count:15, speed:1.5 },
+    { color:'red', count:10, speed:2 },
+    { color:'orange', count:5, speed:2.5, fireRate:2000 }
+  ];
+
+  // HUD
+  const hudWave = document.getElementById('wave');
+  const hudScore = document.getElementById('score');
+  const hudLives = document.getElementById('lives');
+  const hudShield = document.getElementById('shield');
+  const btnSpeed = document.getElementById('btnSpeed');
+  const btnRate = document.getElementById('btnRate');
+  const btnShield = document.getElementById('btnShield');
+  const btnSpread = document.getElementById('btnSpread');
+  const btnMega = document.getElementById('btnMega');
+  const btnWarp = document.getElementById('btnWarp');
+
+  // Controls
+  document.addEventListener('keydown', e => {
+    if(e.key==='ArrowLeft') keys.left=true;
+    if(e.key==='ArrowRight') keys.right=true;
+    if(e.code==='Space' && !spaceHold) startPrimaryFire();
+  });
+  document.addEventListener('keyup', e => {
+    if(e.key==='ArrowLeft') keys.left=false;
+    if(e.key==='ArrowRight') keys.right=false;
+    if(e.code==='Space') stopPrimaryFire();
+  });
+  let primaryInterval=null, spaceHold=false;
+  document.getElementById('shoot').addEventListener('mousedown', () => {
+    spaceHold=true;
+    startPrimaryFire();
+  });
+  document.getElementById('shoot').addEventListener('mouseup', () => {
+    spaceHold=false;
+    stopPrimaryFire();
+    // mega on tap
+    if(stats.dmgMega>0) beams.push({ x: ship.x, frames: 5 });
+  });
+
+  function startPrimaryFire(){
+    firePrimary();
+    primaryInterval = setInterval(firePrimary, stats.fireRate);
+  }
+  function stopPrimaryFire(){
+    clearInterval(primaryInterval);
+  }
+  function firePrimary(){
+    bullets.push({ x: ship.x, y: ship.y-20, speed:10, damage: stats.dmgSingle });
+    if(stats.dmgSpread){
+      [-15,15].forEach(dx=> bullets.push({ x: ship.x+dx, y: ship.y-20, speed:10, damage: stats.dmgSpread }));
+    }
+  }
+
+  document.getElementById('btnStart').onclick = startWave;
+  btnSpeed.onclick = () => upgrade('speed',10);
+  btnRate.onclick = () => upgrade('fireRate',15);
+  btnShield.onclick = () => upgrade('shield',20);
+  btnSpread.onclick = () => upgrade('spread',25);
+  // mega only on tap
+  btnWarp.onclick = () => {
+    if(stats.score>=1000){
+      stats.score -= 1000;
+      stats.warpAmmo++;
+    }
+  };
+  btnWarp.addEventListener('click', () => {
+    if(stats.warpAmmo>0){
+      warps.push({ x: ship.x, y: ship.y-20, radius:50, speed:2 });
+      stats.warpAmmo--;
+    }
+  });
+
+  function upgrade(type,cost){
+    if(stats.score < cost) return;
+    stats.score -= cost;
+    switch(type){
+      case 'speed': ship.speed++; break;
+      case 'fireRate': stats.fireRate*=0.8; break;
+      case 'shield': stats.shield = Math.min(5, stats.shield+1); break;
+      case 'spread': stats.dmgSpread++; break;
+      case 'mega': stats.dmgMega++; break;
+    }
+  }
+
+  function initStars(){
+    for(let i=0;i<3;i++){
+      stars[i]=[];
+      let count=20+i*15;
+      for(let j=0;j<count;j++){
+        stars[i].push({ x:Math.random()*worldW, y:Math.random()*worldH, size:Math.random()*2+1 });
+      }
+    }
+  }
+  initStars();
+
+  setInterval(()=>{
+    planets.push({ x:Math.random()*worldW, y:-50, radius:20+Math.random()*30, angle:0, speed:0.1, rotSpeed:0.002 });
+  },30000);
+
+  setInterval(()=>{
+    if(!waveActive) return;
+    meteors.push({ x:Math.random()*worldW, y:-50, size:30+Math.random()*20, speed:1+Math.random(), health:2 });
+  },1200);
+
+  function startWave(){
+    if(waveActive) return;
+    stats.wave++; waveActive=true;
+    hudWave.textContent = stats.wave;
+    aliens.length=0;
+    const cycle=Math.floor((stats.wave-1)/4);
+    const def=waveDefs[(stats.wave-1)%4];
+    for(let i=0;i<def.count+cycle*5;i++){
+      setTimeout(()=>{
+        aliens.push({
+          x:Math.random()*worldW, y:-20, size:20,
+          speed:def.speed+cycle*0.2, color:def.color,
+          health:1+cycle, fireRate:def.fireRate||0, lastFire:0
+        });
+      }, Math.random()*2000);
+    }
+  }
+
+  function gameOver(){
+    ctx.save();
+    ctx.fillStyle='red';
+    ctx.font='4rem Courier New';
+    ctx.textAlign='center';
+    ctx.fillText('GAME OVER', worldW/2, worldH/2);
+    ctx.restore();
+    setTimeout(()=> location.reload(),2000);
+  }
+
+  function update(){
+    // Stars
+    stars.forEach((layer,i)=> layer.forEach(s=>{ s.y+=(i+1)*0.2; if(s.y>worldH) s.y=0; }));
+    // Planets
+    planets.forEach((p,i)=>{ p.y+=p.speed; p.angle+=p.rotSpeed; if(p.y>worldH+p.radius) planets.splice(i,1); });
+    // Meteors
+    meteors.forEach((m,i)=>{ 
+      m.y+=m.speed;
+      if(m.y>worldH+m.size) meteors.splice(i,1);
+      if(Math.hypot(ship.x-m.x, ship.y-m.y) < m.size+10){
+        meteors.splice(i,1);
+        stats.shield>0?stats.shield--:stats.lives--;
+      }
+    });
+    // Aliens
+    aliens.forEach((a,i)=>{ 
+      a.y+=a.speed; a.x+=(ship.x>a.x?0.5:-0.5);
+      if(a.fireRate){
+        let now=Date.now();
+        if(now-a.lastFire>a.fireRate){
+          a.lastFire=now;
+          alienBullets.push({ x:a.x, y:a.y+20, speed:5 });
+        }
+      }
+      if(a.y>worldH+a.size) aliens.splice(i,1);
+      if(Math.hypot(ship.x-a.x, ship.y-a.y) < a.size+10){
+        aliens.splice(i,1);
+        stats.shield>0?stats.shield--:stats.lives--;
+      }
+    });
+    // Bullets
+    bullets.forEach((b,i)=>{
+      b.y-=b.speed;
+      if(b.y<0) return bullets.splice(i,1);
+      for(let j=0;j<aliens.length;j++){
+        let a=aliens[j];
+        if(Math.hypot(b.x-a.x,b.y-a.y)<a.size){
+          bullets.splice(i,1); a.health-=b.damage;
+          if(a.health<=0){ aliens.splice(j,1); stats.score+=10; }
+          return;
+        }
+      }
+      for(let j=0;j<meteors.length;j++){
+        let m=meteors[j];
+        if(Math.hypot(b.x-m.x,b.y-m.y)<m.size){
+          bullets.splice(i,1); m.health--; stats.score++;
+          if(m.health<=0) meteors.splice(j,1);
+          return;
+        }
+      }
+    });
+    // Alien bullets
+    alienBolts: alienBullets.forEach((b,i)=>{
+      b.y+=b.speed;
+      if(b.y>worldH) return alienBullets.splice(i,1);
+      if(Math.hypot(ship.x-b.x, ship.y-b.y)<10){
+        alienBullets.splice(i,1);
+        stats.shield>0?stats.shield--:stats.lives--;
+      }
+    });
+    // Beams
+    beams.forEach((bm,i)=>{
+      for(let j=0;j<aliens.length;j++){
+        let a=aliens[j];
+        if(Math.abs(a.x-bm.x)<20){
+          aliens.splice(j,1); stats.score+=10;
+        }
+      }
+      bm.frames--; if(bm.frames<0) beams.splice(i,1);
+    });
+    // Warps
+    warps.forEach((w,i)=>{
+      w.y-=w.speed;
+      aliens.forEach((a,j)=>{
+        if(Math.hypot(w.x-a.x,w.y-a.y)<w.radius){
+          aliens.splice(j,1); stats.score+=20;
+        }
+      });
+      if(w.y< -w.radius) warps.splice(i,1);
+    });
+    // Ship movement
+    if(keys.left) ship.x-=ship.speed;
+    if(keys.right) ship.x+=ship.speed;
+    ship.x=Math.max(20,Math.min(worldW-20,ship.x));
+    // End wave
+    if(waveActive && aliens.length===0) waveActive=false;
+    // Game over
+    if(stats.lives<=0){ gameOver(); return; }
+    // HUD
+    hudScore.textContent=stats.score;
+    hudLives.textContent='❤'.repeat(stats.lives);
+    hudShield.textContent='🔵'.repeat(stats.shield);
+    // Disable upgrades
+    btnSpeed.disabled=stats.score<10;
+    btnRate.disabled=stats.score<15;
+    btnShield.disabled=stats.score<20;
+    btnSpread.disabled=stats.score<25;
+    btnMega.disabled=stats.score<30;
+    btnWarp.disabled=stats.score<1000;
+  }
+
+  function drawShip(){
+    ctx.save(); ctx.translate(ship.x, ship.y);
+    ctx.fillStyle=ship.color;
+    ctx.fillRect(-10,-20,20,40);
+    ctx.beginPath(); ctx.moveTo(-10,0); ctx.lineTo(-20,15); ctx.lineTo(-10,15); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(10,0); ctx.lineTo(20,15); ctx.lineTo(10,15); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(-10,-20); ctx.lineTo(0,-30); ctx.lineTo(10,-20); ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+
+  function draw(){
+    ctx.clearRect(0,0,W,H);
+    // Stars
+    stars.forEach(layer=>layer.forEach(s=>{ ctx.fillStyle='white'; ctx.fillRect(s.x,s.y,s.size,s.size); }));
+    // Planets
+    planets.forEach(p=>{ ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(p.angle);
+      ctx.fillStyle='rgba(100,80,150,0.5)'; ctx.beginPath(); ctx.arc(0,0,p.radius,0,Math.PI*2); ctx.fill(); ctx.restore();
+    });
+    // Meteors
+    meteors.forEach(m=>{ ctx.fillStyle='#B7410E'; ctx.beginPath(); ctx.arc(m.x,m.y,m.size,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle='#8B4513'; for(let i=0;i<4;i++){ const sx=m.x+(Math.random()*2-1)*m.size*0.5; const sy=m.y+(Math.random()*2-1)*m.size*0.5; ctx.beginPath(); ctx.arc(sx,sy,m.size*0.15,0,Math.PI*2); ctx.fill(); }
+    });
+    // Aliens
+    aliens.forEach(a=>{ ctx.fillStyle=a.color; ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(a.x-10,a.y+20); ctx.lineTo(a.x+10,a.y+20); ctx.closePath(); ctx.fill(); });
+    // Bullets
+    bullets.forEach(b=>{ ctx.fillStyle='cyan'; ctx.fillRect(b.x-2,b.y-10,4,10); });
+    alienBullets.forEach(b=>{ ctx.fillStyle='magenta'; ctx.fillRect(b.x-2,b.y,4,10); });
+    // Beams
+    beams.forEach(be=>{ ctx.strokeStyle='red'; ctx.lineWidth=4; ctx.beginPath(); ctx.moveTo(be.x,0); ctx.lineTo(be.x,worldH); ctx.stroke(); });
+    // Warps
+    warps.forEach(w=>{ ctx.strokeStyle='purple'; ctx.lineWidth=3; ctx.beginPath(); ctx.arc(w.x,w.y,w.radius,0,Math.PI*2); ctx.stroke(); });
+    // Ship
+    drawShip();
+  }
+
+  function loop(){ update(); draw(); requestAnimationFrame(loop); }
+  loop();
+};
+  </script>
+</body>
+</html>
